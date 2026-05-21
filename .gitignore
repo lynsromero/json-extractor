@@ -1,0 +1,36 @@
+# AI agent rules
+agents.md
+
+# Project plan
+PROJECT_PLAN.md
+
+# Composer
+/vendor/
+composer.lock
+
+# Storage (runtime data, not source)
+/storage/uploads/*
+!/storage/uploads/.gitkeep
+/storage/logs/*
+!/storage/logs/.gitkeep
+/storage/progress/*
+!/storage/progress/.gitkeep
+/storage/excel/*
+!/storage/excel/.gitkeep
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# PHP
+*.log

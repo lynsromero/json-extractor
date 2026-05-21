@@ -1,0 +1,14 @@
+RewriteEngine On
+
+# Route all requests through index.php (except real files)
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php [QSA,L]
+
+# Security: block direct access to sensitive paths
+RewriteRule ^(\.git|config|src|storage) - [F,L]
+
+# Allow CORS for chunked uploads (Resumable.js may send preflight)
+Header set Access-Control-Allow-Origin "*"
+Header set Access-Control-Allow-Methods "GET, POST, OPTIONS"
+Header set Access-Control-Allow-Headers "Content-Type, X-Requested-With"

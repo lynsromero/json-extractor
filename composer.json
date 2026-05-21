@@ -1,0 +1,16 @@
+{
+    "name": "json-extractor/high-performance-processor",
+    "description": "High-performance PHP application for processing massive JSON files with chunked uploads, streaming ingestion, and Excel export",
+    "type": "project",
+    "license": "MIT",
+    "minimum-stability": "stable",
+    "require": {
+        "php": ">=8.1",
+        "jsonmachine/jsonmachine": "^1.1",
+        "openspout/openspout": "^4.23"
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "preferred-install": "dist"
+    }
+}

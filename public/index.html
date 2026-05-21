@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JSON Extractor — High-Performance Processor</title>
+    <script src="https://cdn.jsdelivr.net/npm/resumablejs@1.1.0/resumable.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+        .container { max-width: 960px; margin: 0 auto; padding: 40px 20px; }
+        h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; color: #f8fafc; }
+        .subtitle { color: #94a3b8; margin-bottom: 32px; font-size: 14px; }
+        .card { background: #1e293b; border-radius: 12px; padding: 24px; margin-bottom: 24px; border: 1px solid #334155; }
+        .card-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #f1f5f9; display: flex; align-items: center; gap: 8px; }
+        .card-title .step { background: #3b82f6; color: #fff; width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
+        .drop-zone { border: 2px dashed #475569; border-radius: 8px; padding: 40px; text-align: center; cursor: pointer; transition: all 0.2s; }
+        .drop-zone:hover, .drop-zone.dragover { border-color: #3b82f6; background: #1e3a5f; }
+        .drop-zone p { color: #94a3b8; font-size: 14px; }
+        .drop-zone .icon { font-size: 40px; margin-bottom: 12px; }
+        .progress-bar-container { background: #334155; border-radius: 6px; height: 8px; margin-top: 16px; overflow: hidden; }
+        .progress-bar { height: 100%; background: linear-gradient(90deg, #3b82f6, #8b5cf6); width: 0%; transition: width 0.3s; border-radius: 6px; }
+        .progress-text { font-size: 13px; color: #94a3b8; margin-top: 8px; }
+        .mapping-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .mapping-item { display: flex; flex-direction: column; gap: 6px; }
+        .mapping-item label { font-size: 13px; color: #94a3b8; font-weight: 500; }
+        .mapping-item select { background: #0f172a; border: 1px solid #475569; color: #e2e8f0; padding: 10px 12px; border-radius: 6px; font-size: 14px; }
+        .mapping-item select:focus { outline: none; border-color: #3b82f6; }
+        .btn { padding: 12px 24px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .btn-primary { background: #3b82f6; color: #fff; }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-primary:disabled { background: #475569; cursor: not-allowed; }
+        .btn-success { background: #22c55e; color: #fff; }
+        .btn-success:hover { background: #16a34a; }
+        .hidden { display: none !important; }
+        .status-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+        .status-idle { background: #334155; color: #94a3b8; }
+        .status-uploading { background: #1e3a5f; color: #60a5fa; }
+        .status-inspecting { background: #4c1d95; color: #a78bfa; }
+        .status-processing { background: #78350f; color: #fbbf24; }
+        .status-exporting { background: #064e3b; color: #34d399; }
+        .status-completed { background: #14532d; color: #4ade80; }
+        .status-error { background: #7f1d1d; color: #f87171; }
+        .phase-indicator { display: flex; gap: 4px; margin-bottom: 16px; }
+        .phase-dot { width: 8px; height: 8px; border-radius: 50%; background: #334155; }
+        .phase-dot.active { background: #3b82f6; box-shadow: 0 0 8px #3b82f6; }
+        .download-list { list-style: none; }
+        .download-list li { padding: 12px 16px; background: #0f172a; border-radius: 6px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .download-list a { color: #60a5fa; text-decoration: none; font-weight: 500; }
+        .download-list a:hover { text-decoration: underline; }
+        .log-area { background: #0f172a; border-radius: 6px; padding: 12px; font-family: 'Fira Code', monospace; font-size: 12px; color: #94a3b8; max-height: 200px; overflow-y: auto; margin-top: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>JSON Extractor</h1>
+        <p class="subtitle">High-performance processor for massive JSON files — 17GB / 60M records</p>
+
+        <!-- Phase Indicator -->
+        <div class="card">
+            <div class="phase-indicator">
+                <div class="phase-dot active" id="phase-upload"></div>
+                <div class="phase-dot" id="phase-inspect"></div>
+                <div class="phase-dot" id="phase-process"></div>
+                <div class="phase-dot" id="phase-export"></div>
+                <div class="phase-dot" id="phase-done"></div>
+            </div>
+            <span class="status-badge status-idle" id="status-badge">Idle</span>
+        </div>
+
+        <!-- Step 1: Upload -->
+        <div class="card" id="card-upload">
+            <div class="card-title"><span class="step">1</span> Upload JSON File</div>
+            <div class="drop-zone" id="drop-zone">
+                <div class="icon">&#128193;</div>
+                <p>Drag & drop your JSON file here, or click to browse</p>
+                <p style="font-size: 12px; margin-top: 8px; color: #64748b;">Supports files up to 17GB — chunked at 10MB</p>
+            </div>
+            <input type="file" id="file-input" style="display: none;" accept=".json">
+            <div class="progress-bar-container hidden" id="upload-progress-container">
+                <div class="progress-bar" id="upload-progress-bar"></div>
+            </div>
+            <p class="progress-text hidden" id="upload-progress-text">0%</p>
+        </div>
+
+        <!-- Step 2: Field Mapping -->
+        <div class="card hidden" id="card-mapping">
+            <div class="card-title"><span class="step">2</span> Field Mapping Grid</div>
+            <p style="font-size: 13px; color: #94a3b8; margin-bottom: 16px;">Confirm which JSON keys map to Email and Country fields. Auto-detected values are pre-selected.</p>
+            <div class="mapping-grid" id="mapping-grid"></div>
+            <div style="margin-top: 20px; display: flex; gap: 12px;">
+                <button class="btn btn-primary" id="btn-start" disabled>Start Processing</button>
+            </div>
+        </div>
+
+        <!-- Step 3: Processing Progress -->
+        <div class="card hidden" id="card-progress">
+            <div class="card-title"><span class="step">3</span> Processing Progress</div>
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="process-progress-bar"></div>
+            </div>
+            <p class="progress-text" id="process-progress-text">Waiting...</p>
+            <div class="log-area" id="log-area"></div>
+        </div>
+
+        <!-- Step 4: Download -->
+        <div class="card hidden" id="card-download">
+            <div class="card-title"><span class="step">4</span> Download Excel Files</div>
+            <ul class="download-list" id="download-list"></ul>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+        let fileId = null;
+        let detectedKeys = [];
+        let progressInterval = null;
+
+        // ─── Phase Management ──────────────────────────────────
+        function setPhase(phase) {
+            const phases = ['upload', 'inspect', 'process', 'export', 'done'];
+            phases.forEach(p => {
+                document.getElementById('phase-' + p).classList.toggle('active', p === phase);
+            });
+        }
+
+        function setStatus(text, type) {
+            const badge = document.getElementById('status-badge');
+            badge.textContent = text;
+            badge.className = 'status-badge status-' + type;
+        }
+
+        function log(msg) {
+            const area = document.getElementById('log-area');
+            const time = new Date().toLocaleTimeString();
+            area.innerHTML += '<div>[' + time + '] ' + msg + '</div>';
+            area.scrollTop = area.scrollHeight;
+        }
+
+        // ─── Resumable.js Upload ───────────────────────────────
+        const resumable = new Resumable({
+            target: API_BASE + '/upload',
+            chunkSize: 10 * 1024 * 1024,
+            simultaneousUploads: 1,
+            testChunks: true,
+            throttleProgressCallbacks: 1,
+            permanentErrors: [404, 500, 501],
+            maxChunkRetries: 3,
+        });
+
+        resumable.assignBrowse(document.getElementById('file-input'));
+        resumable.assignDrop(document.getElementById('drop-zone'));
+
+        const dropZone = document.getElementById('drop-zone');
+        dropZone.addEventListener('click', () => document.getElementById('file-input').click());
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); });
+
+        resumable.on('fileAdded', (file) => {
+            fileId = 'upload_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            resumable.opts.query = { resumableIdentifier: fileId };
+            resumable.upload();
+            setPhase('upload');
+            setStatus('Uploading...', 'uploading');
+            document.getElementById('upload-progress-container').classList.remove('hidden');
+            document.getElementById('upload-progress-text').classList.remove('hidden');
+            log('Upload started: ' + file.name + ' (' + (file.size / (1024*1024*1024)).toFixed(2) + ' GB)');
+        });
+
+        resumable.on('progress', () => {
+            const pct = (resumable.progress() * 100).toFixed(1);
+            document.getElementById('upload-progress-bar').style.width = pct + '%';
+            document.getElementById('upload-progress-text').textContent = pct + '% uploaded';
+        });
+
+        resumable.on('fileSuccess', (file, message) => {
+            const response = JSON.parse(message);
+            if (response.status === 'complete') {
+                document.getElementById('upload-progress-bar').style.width = '100%';
+                document.getElementById('upload-progress-text').textContent = 'Upload complete! Inspecting metadata...';
+                log('Upload complete. File assembled.');
+                setPhase('inspect');
+                setStatus('Inspecting...', 'inspecting');
+                fetchMetadata(fileId);
+            }
+        });
+
+        resumable.on('fileError', (file, message) => {
+            setStatus('Upload failed', 'error');
+            log('Upload error: ' + message);
+        });
+
+        // ─── Metadata Inspection ───────────────────────────────
+        function fetchMetadata(id) {
+            fetch(API_BASE + '/upload?action=inspect&resumableIdentifier=' + id)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) {
+                        setStatus('Inspection failed: ' + data.error, 'error');
+                        log('Inspection error: ' + data.error);
+                        return;
+                    }
+                    detectedKeys = data.keys || [];
+                    renderMappingGrid(data.suggestions);
+                    document.getElementById('card-mapping').classList.remove('hidden');
+                    setStatus('Ready for mapping', 'inspecting');
+                    log('Detected ' + detectedKeys.length + ' keys. Email: ' + (data.suggestions.email || 'none') + ', Country: ' + (data.suggestions.country || 'none'));
+                })
+                .catch(err => {
+                    setStatus('Inspection failed', 'error');
+                    log('Inspection error: ' + err.message);
+                });
+        }
+
+        // ─── Field Mapping Grid ────────────────────────────────
+        function renderMappingGrid(suggestions) {
+            const grid = document.getElementById('mapping-grid');
+            grid.innerHTML = '';
+
+            const fields = [
+                { key: 'email_key', label: 'Email Field', suggestion: suggestions.email },
+                { key: 'country_key', label: 'Country Field', suggestion: suggestions.country },
+            ];
+
+            fields.forEach(field => {
+                const div = document.createElement('div');
+                div.className = 'mapping-item';
+                div.innerHTML = '<label>' + field.label + '</label>' +
+                    '<select id="' + field.key + '" data-suggestion="' + (field.suggestion || '') + '">' +
+                    '<option value="">-- Select --</option>' +
+                    detectedKeys.map(k => '<option value="' + k + '"' + (k === field.suggestion ? ' selected' : '') + '>' + k + '</option>').join('') +
+                    '</select>';
+                grid.appendChild(div);
+            });
+
+            // Enable button when both fields selected
+            const selects = grid.querySelectorAll('select');
+            selects.forEach(sel => {
+                sel.addEventListener('change', () => {
+                    const allSelected = Array.from(selects).every(s => s.value !== '');
+                    document.getElementById('btn-start').disabled = !allSelected;
+                });
+            });
+        }
+
+        // ─── Start Processing ──────────────────────────────────
+        document.getElementById('btn-start').addEventListener('click', () => {
+            const emailKey = document.getElementById('email_key').value;
+            const countryKey = document.getElementById('country_key').value;
+
+            if (!emailKey || !countryKey || !fileId) return;
+
+            document.getElementById('btn-start').disabled = true;
+            document.getElementById('card-progress').classList.remove('hidden');
+            setPhase('process');
+            setStatus('Processing...', 'processing');
+            log('Starting background worker...');
+
+            fetch(API_BASE + '/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file_id: fileId, email_key: emailKey, country_key: countryKey }),
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    setStatus('Failed to start: ' + data.error, 'error');
+                    log('Start error: ' + data.error);
+                    return;
+                }
+                log('Worker launched. PID: ' + (data.pid || 'unknown'));
+                startProgressPolling();
+            })
+            .catch(err => {
+                setStatus('Failed to start', 'error');
+                log('Start error: ' + err.message);
+            });
+        });
+
+        // ─── Progress Polling ──────────────────────────────────
+        function startProgressPolling() {
+            progressInterval = setInterval(() => {
+                fetch(API_BASE + '/progress')
+                    .then(res => res.json())
+                    .then(data => {
+                        const pct = data.percent || 0;
+                        document.getElementById('process-progress-bar').style.width = pct + '%';
+                        document.getElementById('process-progress-text').textContent = data.message || 'Processing...';
+
+                        if (data.phase) {
+                            setPhase(data.phase === 'ingestion' ? 'process' : data.phase === 'export' ? 'export' : 'done');
+                            setStatus(data.phase || 'Processing...', data.status || 'processing');
+                        }
+
+                        if (data.status === 'completed') {
+                            clearInterval(progressInterval);
+                            setStatus('Completed', 'completed');
+                            log('Processing complete!');
+                            showDownloads(data.files || []);
+                        } else if (data.status === 'error') {
+                            clearInterval(progressInterval);
+                            setStatus('Error: ' + (data.message || 'Unknown'), 'error');
+                            log('Worker error: ' + data.message);
+                        }
+                    })
+                    .catch(() => {});
+            }, 2000);
+        }
+
+        // ─── Download Links ────────────────────────────────────
+        function showDownloads(files) {
+            document.getElementById('card-download').classList.remove('hidden');
+            setPhase('done');
+            const list = document.getElementById('download-list');
+            list.innerHTML = '';
+            if (files.length === 0) {
+                list.innerHTML = '<li>No files generated</li>';
+                return;
+            }
+            files.forEach(f => {
+                const li = document.createElement('li');
+                li.innerHTML = '<span>' + f.name + '</span><a href="' + f.url + '" download>Download</a>';
+                list.appendChild(li);
+            });
+        }
+    </script>
+</body>
+</html>

@@ -53,6 +53,7 @@ $pdo->exec("
         `email_domain` VARCHAR(255) NOT NULL,
         `country` VARCHAR(255) NOT NULL,
         `raw_email` VARCHAR(512) NOT NULL,
+        `raw_data` JSON NOT NULL,
         INDEX `idx_country_domain` (`country`, `email_domain`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ");

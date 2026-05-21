@@ -274,28 +274,46 @@
             fields.forEach(field => {
                 const div = document.createElement('div');
                 div.className = 'mapping-item';
-                div.innerHTML = '<label>' + field.label + '</label>' +
-                    '<select id="' + field.key + '" data-suggestion="' + (field.suggestion || '') + '">' +
-                    '<option value="">-- Select --</option>' +
-                    detectedKeys.map(k => '<option value="' + k + '"' + (k === field.suggestion ? ' selected' : '') + '>' + k + '</option>').join('') +
-                    '</select>';
+                div.innerHTML =
+                    '<label>' + field.label + '</label>' +
+                    '<select id="' + field.key + '_select">' +
+                        '<option value="">-- Select from dropdown --</option>' +
+                        detectedKeys.map(k => '<option value="' + k + '"' + (k === field.suggestion ? ' selected' : '') + '>' + k + '</option>').join('') +
+                    '</select>' +
+                    '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">' +
+                        '<span style="color:#64748b;font-size:12px;">or type:</span>' +
+                        '<input type="text" id="' + field.key + '_input" placeholder="e.g. ' + (field.suggestion || 'email') + '" value="' + (field.suggestion || '') + '" style="flex:1;background:#0f172a;border:1px solid #475569;color:#e2e8f0;padding:8px 10px;border-radius:6px;font-size:13px;" />' +
+                    '</div>';
                 grid.appendChild(div);
             });
 
-            // Enable button when both fields selected
-            const selects = grid.querySelectorAll('select');
-            selects.forEach(sel => {
-                sel.addEventListener('change', () => {
-                    const allSelected = Array.from(selects).every(s => s.value !== '');
-                    document.getElementById('btn-start').disabled = !allSelected;
-                });
+            // Enable button when both fields have values (from either dropdown or text input)
+            const allInputs = grid.querySelectorAll('select, input[type="text"]');
+            allInputs.forEach(el => {
+                el.addEventListener('input', checkMappingReady);
+                el.addEventListener('change', checkMappingReady);
             });
+
+            checkMappingReady();
+        }
+
+        function checkMappingReady() {
+            const emailVal = getFieldValue('email_key');
+            const countryVal = getFieldValue('country_key');
+            document.getElementById('btn-start').disabled = !(emailVal && countryVal);
+        }
+
+        function getFieldValue(baseKey) {
+            const select = document.getElementById(baseKey + '_select');
+            const input = document.getElementById(baseKey + '_input');
+            // Prioritize dropdown selection, fall back to manual input
+            return (select && select.value) ? select.value : (input ? input.value.trim() : '');
         }
 
         // ─── Start Processing ──────────────────────────────────
         document.getElementById('btn-start').addEventListener('click', () => {
-            const emailKey = document.getElementById('email_key').value;
-            const countryKey = document.getElementById('country_key').value;
+            const emailKey = getFieldValue('email_key');
+            const countryKey = getFieldValue('country_key');
 
             if (!emailKey || !countryKey || !fileId) return;
 
@@ -313,7 +331,7 @@
             fetch(API_BASE + '/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file_id: fileId, email_key: emailKey, country_key: countryKey }),
+                body: JSON.stringify({ file_id: fileId, email_key: emailKey, country_key: countryKey, all_keys: detectedKeys }),
             })
             .then(res => res.json())
             .then(data => {
@@ -399,7 +417,7 @@
             fetch(API_BASE + '/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file_id: fileId, email_key: savedMapping.email_key, country_key: savedMapping.country_key }),
+                body: JSON.stringify({ file_id: fileId, email_key: savedMapping.email_key, country_key: savedMapping.country_key, all_keys: detectedKeys }),
             })
             .then(res => res.json())
             .then(data => {

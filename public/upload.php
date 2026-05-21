@@ -201,87 +201,58 @@ function deleteDirectory(string $dir): void
  * Opens a minimal read stream on the JSON file to parse ONLY the first record.
  * Extracts all top-level keys and runs heuristics to auto-detect Email and Country.
  *
+ * Supports both formats:
+ * - Array-wrapped: [{"key":"value"}, ...]
+ * - NDJSON (newline-delimited): {"key":"value"}\n{"key":"value"}
+ *
  * MEMORY SAFETY:
- * - Reads only the first 4096 bytes — never loads the full file
- * - Uses a bounded stream read to prevent memory spikes on 17GB files
+ * - Reads only the first 8KB — never loads the full file
+ * - Uses multiple fallback strategies for robustness
  *
  * @param string $filePath Path to the assembled JSON file
  * @return array{keys: string[], suggestions: array{email: string|null, country: string|null}}
  */
 function inspectFirstRecord(string $filePath): array
 {
-    // MEMORY SAFETY: Read only the first 4KB to capture the first JSON object
-    // This is sufficient for extracting keys from the first record
+    // MEMORY SAFETY: Read only the first 8KB
     $handle = fopen($filePath, 'r');
     if ($handle === false) {
         return ['error' => 'Unable to open file for inspection'];
     }
 
-    // Skip whitespace and opening bracket/array syntax
-    $buffer = '';
-    $depth = 0;
-    $inString = false;
-    $escaped = false;
-    $foundFirstObject = false;
-    $firstRecord = '';
+    $preview = fread($handle, 8192);
+    fclose($handle);
 
-    // Read byte-by-byte until we capture the first complete JSON object
-    // This handles both array-wrapped [{"key":"value"}, ...] and NDJSON formats
-    while (!feof($handle)) {
-        $char = fgetc($handle);
-        if ($char === false) {
-            break;
-        }
+    if ($preview === false || strlen($preview) === 0) {
+        return [
+            'keys'        => [],
+            'suggestions' => ['email' => null, 'country' => null],
+            'warning'     => 'File is empty or unreadable.',
+        ];
+    }
 
-        $buffer .= $char;
+    $record = null;
 
-        // Safety limit: stop after reading 8KB to prevent runaway reads
-        if (strlen($buffer) > 8192) {
-            break;
-        }
-
-        if ($escaped) {
-            $escaped = false;
-            continue;
-        }
-
-        if ($char === '\\') {
-            $escaped = true;
-            continue;
-        }
-
-        if ($char === '"') {
-            $inString = !$inString;
-            continue;
-        }
-
-        if ($inString) {
-            continue;
-        }
-
-        if ($char === '[' || $char === '{') {
-            if ($char === '{' && $depth === 0) {
-                $foundFirstObject = true;
-            }
-            $depth++;
-            if ($foundFirstObject) {
-                $firstRecord .= $char;
-            }
-        } elseif ($char === '}' || $char === ']') {
-            $depth--;
-            if ($foundFirstObject) {
-                $firstRecord .= $char;
-            }
-            if ($foundFirstObject && $depth === 0) {
-                break;
-            }
+    // Strategy 1: Try NDJSON — first line is a complete JSON object
+    $firstLine = strtok($preview, "\n\r");
+    if ($firstLine !== false) {
+        $firstLine = trim($firstLine);
+        if (str_starts_with($firstLine, '{')) {
+            $record = json_decode($firstLine, true);
         }
     }
 
-    fclose($handle);
+    // Strategy 2: Try array-wrapped format [{"key":"value"}, ...]
+    if ($record === null && str_starts_with(trim($preview), '[')) {
+        // Find the first complete object within the array
+        $record = extractFirstObjectFromArray($preview);
+    }
 
-    // Parse the first record
-    $record = json_decode($firstRecord, true);
+    // Strategy 3: Try finding first { } block anywhere in preview
+    if ($record === null) {
+        $record = extractFirstObjectAnywhere($preview);
+    }
+
     if (!is_array($record) || empty($record)) {
         return [
             'keys'        => [],
@@ -303,6 +274,115 @@ function inspectFirstRecord(string $filePath): array
         'keys'        => $keys,
         'suggestions' => $suggestions,
     ];
+}
+
+/**
+ * Extracts the first JSON object from an array-wrapped format.
+ */
+function extractFirstObjectFromArray(string $preview): ?array
+{
+    $depth = 0;
+    $inString = false;
+    $escaped = false;
+    $firstRecord = '';
+    $foundObject = false;
+
+    for ($i = 0; $i < strlen($preview); $i++) {
+        $char = $preview[$i];
+
+        if ($escaped) {
+            $escaped = false;
+            continue;
+        }
+
+        if ($char === '\\') {
+            $escaped = true;
+            continue;
+        }
+
+        if ($char === '"') {
+            $inString = !$inString;
+            continue;
+        }
+
+        if ($inString) {
+            continue;
+        }
+
+        if ($char === '{') {
+            if (!$foundObject) {
+                $foundObject = true;
+            }
+            $depth++;
+            $firstRecord .= $char;
+        } elseif ($char === '}') {
+            $depth--;
+            $firstRecord .= $char;
+            if ($depth === 0) {
+                break;
+            }
+        }
+    }
+
+    return $foundObject ? json_decode($firstRecord, true) : null;
+}
+
+/**
+ * Finds the first { } block anywhere in the preview string.
+ */
+function extractFirstObjectAnywhere(string $preview): ?array
+{
+    $start = strpos($preview, '{');
+    if ($start === false) {
+        return null;
+    }
+
+    $depth = 0;
+    $inString = false;
+    $escaped = false;
+    $firstRecord = '';
+
+    for ($i = $start; $i < strlen($preview); $i++) {
+        $char = $preview[$i];
+
+        if ($escaped) {
+            $escaped = false;
+            $firstRecord .= $char;
+            continue;
+        }
+
+        if ($char === '\\') {
+            $escaped = true;
+            $firstRecord .= $char;
+            continue;
+        }
+
+        if ($char === '"') {
+            $inString = !$inString;
+            $firstRecord .= $char;
+            continue;
+        }
+
+        if ($inString) {
+            $firstRecord .= $char;
+            continue;
+        }
+
+        if ($char === '{') {
+            $depth++;
+            $firstRecord .= $char;
+        } elseif ($char === '}') {
+            $depth--;
+            $firstRecord .= $char;
+            if ($depth === 0) {
+                break;
+            }
+        } else {
+            $firstRecord .= $char;
+        }
+    }
+
+    return json_decode($firstRecord, true);
 }
 
 // ─── Helper: Detect Email key via @ symbol regex ───────────────

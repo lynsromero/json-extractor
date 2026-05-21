@@ -38,6 +38,7 @@ $input = json_decode(file_get_contents('php://input'), true);
 $fileId     = isset($input['file_id'])     ? trim($input['file_id'])     : '';
 $emailKey   = isset($input['email_key'])   ? trim($input['email_key'])   : '';
 $countryKey = isset($input['country_key']) ? trim($input['country_key']) : '';
+$allKeys    = isset($input['all_keys'])    ? $input['all_keys']           : [];
 
 if (empty($fileId) || empty($emailKey) || empty($countryKey)) {
     http_response_code(400);
@@ -45,10 +46,18 @@ if (empty($fileId) || empty($emailKey) || empty($countryKey)) {
     exit;
 }
 
+if (!is_array($allKeys) || empty($allKeys)) {
+    http_response_code(400);
+    echo json_encode(['error' => 'Missing all_keys array']);
+    exit;
+}
+
 // Sanitize to prevent command injection
 $fileId     = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $fileId);
 $emailKey   = escapeshellarg($emailKey);
 $countryKey = escapeshellarg($countryKey);
+// Pass keys as comma-separated string to avoid JSON escaping issues
+$allKeysCsv = escapeshellarg(implode(',', array_map('trim', $allKeys)));
 
 $finalFile = UPLOAD_PATH . '/' . $fileId . '.json';
 
@@ -73,12 +82,13 @@ $phpBinary = PHP_BINARY ?: 'php';
 $workerPath = BASE_PATH . '/src/worker.php';
 
 $cmd = sprintf(
-    '%s %s --file_id=%s --email_key=%s --country_key=%s',
+    '%s %s --file_id=%s --email_key=%s --country_key=%s --all_keys=%s',
     $phpBinary,
     $workerPath,
     escapeshellarg($fileId),
     $emailKey,
-    $countryKey
+    $countryKey,
+    $allKeysCsv
 );
 
 // ─── Launch detached background process ────────────────────────

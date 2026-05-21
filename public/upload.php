@@ -1,15 +1,16 @@
 <?php
 /**
- * Chunk Upload Receiver — Step 3
+ * Chunk Upload Receiver + Metadata Inspector — Steps 3 & 4
  *
  * Handles Resumable.js chunked uploads (10MB slices).
- * Supports GET (test chunk existence) and POST (receive chunk).
+ * Supports GET (test chunk existence / inspect metadata) and POST (receive chunk).
  * Assembles final file when all chunks are received.
  *
  * MEMORY SAFETY:
  * - Chunks are streamed directly to disk via fopen/fwrite
  * - No chunk data is ever held in PHP memory
  * - Assembly uses sequential file append — constant memory footprint
+ * - Metadata inspection reads only the first ~4KB of the file
  *
  * Resumable.js parameters:
  *   resumableChunkNumber      — Current chunk number (1-based)
@@ -44,6 +45,7 @@ $totalSize        = isset($_GET['resumableTotalSize'])        ? (int)$_GET['resu
 $identifier       = isset($_GET['resumableIdentifier'])       ? $_GET['resumableIdentifier']            : '';
 $filename         = isset($_GET['resumableFilename'])         ? $_GET['resumableFilename']              : 'upload.json';
 $totalChunks      = isset($_GET['resumableTotalChunks'])      ? (int)$_GET['resumableTotalChunks']      : 0;
+$action           = isset($_GET['action'])                    ? $_GET['action']                         : '';
 
 // Sanitize identifier to prevent path traversal
 $identifier = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $identifier);
@@ -58,8 +60,22 @@ if (empty($identifier)) {
 $uploadDir = UPLOAD_PATH . '/' . $identifier;
 $finalFile = UPLOAD_PATH . '/' . $identifier . '.json';
 
-// ─── GET Request: Test if chunk exists ─────────────────────────
+// ─── GET Request: Test if chunk exists OR inspect metadata ─────
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    // Metadata inspection: triggered after upload completes
+    if ($action === 'inspect') {
+        if (!file_exists($finalFile)) {
+            http_response_code(404);
+            echo json_encode(['error' => 'File not found. Upload may not be complete.']);
+            exit;
+        }
+
+        $metadata = inspectFirstRecord($finalFile);
+        echo json_encode($metadata);
+        exit;
+    }
+
+    // Standard chunk existence check
     $chunkFile = $uploadDir . '/chunk_' . sprintf('%07d', $chunkNumber);
 
     if (file_exists($chunkFile)) {
@@ -178,4 +194,165 @@ function deleteDirectory(string $dir): void
         is_dir($path) ? deleteDirectory($path) : unlink($path);
     }
     rmdir($dir);
+}
+
+// ─── Helper: Inspect first JSON record and extract metadata ────
+/**
+ * Opens a minimal read stream on the JSON file to parse ONLY the first record.
+ * Extracts all top-level keys and runs heuristics to auto-detect Email and Country.
+ *
+ * MEMORY SAFETY:
+ * - Reads only the first 4096 bytes — never loads the full file
+ * - Uses a bounded stream read to prevent memory spikes on 17GB files
+ *
+ * @param string $filePath Path to the assembled JSON file
+ * @return array{keys: string[], suggestions: array{email: string|null, country: string|null}}
+ */
+function inspectFirstRecord(string $filePath): array
+{
+    // MEMORY SAFETY: Read only the first 4KB to capture the first JSON object
+    // This is sufficient for extracting keys from the first record
+    $handle = fopen($filePath, 'r');
+    if ($handle === false) {
+        return ['error' => 'Unable to open file for inspection'];
+    }
+
+    // Skip whitespace and opening bracket/array syntax
+    $buffer = '';
+    $depth = 0;
+    $inString = false;
+    $escaped = false;
+    $foundFirstObject = false;
+    $firstRecord = '';
+
+    // Read byte-by-byte until we capture the first complete JSON object
+    // This handles both array-wrapped [{"key":"value"}, ...] and NDJSON formats
+    while (!feof($handle)) {
+        $char = fgetc($handle);
+        if ($char === false) {
+            break;
+        }
+
+        $buffer .= $char;
+
+        // Safety limit: stop after reading 8KB to prevent runaway reads
+        if (strlen($buffer) > 8192) {
+            break;
+        }
+
+        if ($escaped) {
+            $escaped = false;
+            continue;
+        }
+
+        if ($char === '\\') {
+            $escaped = true;
+            continue;
+        }
+
+        if ($char === '"') {
+            $inString = !$inString;
+            continue;
+        }
+
+        if ($inString) {
+            continue;
+        }
+
+        if ($char === '[' || $char === '{') {
+            if ($char === '{' && $depth === 0) {
+                $foundFirstObject = true;
+            }
+            $depth++;
+            if ($foundFirstObject) {
+                $firstRecord .= $char;
+            }
+        } elseif ($char === '}' || $char === ']') {
+            $depth--;
+            if ($foundFirstObject) {
+                $firstRecord .= $char;
+            }
+            if ($foundFirstObject && $depth === 0) {
+                break;
+            }
+        }
+    }
+
+    fclose($handle);
+
+    // Parse the first record
+    $record = json_decode($firstRecord, true);
+    if (!is_array($record) || empty($record)) {
+        return [
+            'keys'        => [],
+            'suggestions' => ['email' => null, 'country' => null],
+            'warning'     => 'Could not parse first JSON record. File may have unexpected structure.',
+        ];
+    }
+
+    // Extract all top-level keys
+    $keys = array_keys($record);
+
+    // Run heuristics to auto-detect Email and Country fields
+    $suggestions = [
+        'email'   => detectEmailKey($record),
+        'country' => detectCountryKey($keys),
+    ];
+
+    return [
+        'keys'        => $keys,
+        'suggestions' => $suggestions,
+    ];
+}
+
+// ─── Helper: Detect Email key via @ symbol regex ───────────────
+/**
+ * Scans all string values in the first record for an '@' symbol.
+ * Returns the key whose value matches an email-like pattern.
+ *
+ * @param array $record The first JSON record
+ * @return string|null The detected email key, or null
+ */
+function detectEmailKey(array $record): ?string
+{
+    $emailPattern = '/@/';
+
+    foreach ($record as $key => $value) {
+        if (is_string($value) && preg_match($emailPattern, $value)) {
+            return $key;
+        }
+    }
+
+    return null;
+}
+
+// ─── Helper: Detect Country key via string matching ────────────
+/**
+ * Scans all keys for country-like naming patterns.
+ * Checks for: 'country', 'company_country', 'nation', 'region', etc.
+ *
+ * @param string[] $keys All top-level keys from the first record
+ * @return string|null The detected country key, or null
+ */
+function detectCountryKey(array $keys): ?string
+{
+    $countryPatterns = [
+        '/^country$/i',
+        '/country$/i',
+        '/^country_/i',
+        '/_country$/i',
+        '/nation/i',
+        '/region/i',
+        '/location/i',
+    ];
+
+    foreach ($countryPatterns as $pattern) {
+        foreach ($keys as $key) {
+            if (preg_match($pattern, $key)) {
+                return $key;
+            }
+        }
+    }
+
+    return null;
 }

@@ -21,6 +21,8 @@ $routes = [
     ['POST', '/upload',    'upload.php'],
     ['POST', '/start',     'start.php'],
     ['GET',  '/progress',  'progress.php'],
+    ['GET',  '/download',  'download.php'],
+    ['POST', '/cleanup',   'cleanup.php'],
 ];
 
 foreach ($routes as [$allowedMethod, $path, $handler]) {
